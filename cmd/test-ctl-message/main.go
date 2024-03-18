@@ -17,8 +17,8 @@ func main() {
 	ch1 := make(chan Message)
 
 	go func() {
-		for i := 0; i < 1000; i++ {
-			for i := 0; i < 10000; i++ {
+		for i := 0; i < 1_000; i++ {
+			for i := 0; i < 10_000; i++ {
 				ch1 <- Message{value: i}
 			}
 			ch1 <- Message{commit: true}

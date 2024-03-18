@@ -1,15 +1,20 @@
 package main
 
-import "log"
+import (
+	"log"
+	"time"
+)
 
 func main() {
+
+	start := time.Now()
 
 	ctl1 := make(chan interface{})
 	msg1 := make(chan int)
 
 	go func() {
-		for i := 0; i < 10; i++ {
-			for i := 0; i < 1000; i++ {
+		for i := 0; i < 1_000; i++ {
+			for i := 0; i < 10_000; i++ {
 				msg1 <- i
 			}
 			ctl1 <- struct{}{}
@@ -26,19 +31,19 @@ func main() {
 			case m, ok := <-msg1:
 				if !ok {
 					msg1 = nil
-					continue
+				} else {
+					msg2 <- m
 				}
-				msg2 <- m
 			case c, ok := <-ctl1:
 				if !ok {
 					ctl1 = nil
-					continue
+				} else {
+					for len(msg1) > 0 {
+						m := <-msg1
+						msg2 <- m
+					}
+					ctl2 <- c
 				}
-				for len(msg1) > 0 {
-					m := <-msg1
-					msg2 <- m
-				}
-				ctl2 <- c
 			}
 			if ctl1 == nil && msg1 == nil {
 				break
@@ -55,19 +60,19 @@ func main() {
 		case _, ok := <-msg2:
 			if !ok {
 				msg2 = nil
-				continue
+			} else {
+				msgCount++
 			}
-			msgCount++
 		case _, ok := <-ctl2:
 			if !ok {
 				ctl2 = nil
-				continue
+			} else {
+				for len(msg2) > 0 {
+					<-msg2
+					msgCount++
+				}
+				ctlCount++
 			}
-			for len(msg2) > 0 {
-				<-msg2
-				msgCount++
-			}
-			ctlCount++
 		}
 		if ctl2 == nil && msg2 == nil {
 			break
@@ -76,4 +81,6 @@ func main() {
 
 	log.Printf("msgCount: %d", msgCount)
 	log.Printf("ctlCount: %d", ctlCount)
+
+	log.Printf("now: %v", time.Since(start))
 }
