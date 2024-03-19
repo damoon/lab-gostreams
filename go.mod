@@ -4,7 +4,6 @@ go 1.22
 
 require (
 	github.com/pkg/profile v1.7.0
-	golang.org/x/sys v0.0.0-20211007075335-d3039528d8ac
 )
 
 require (

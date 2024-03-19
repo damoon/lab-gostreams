@@ -1,153 +1,156 @@
 package stream
 
+import "log"
+
 type ControlMsg int64
 
 const (
-	buffer            = 10
+	buffer            = 1_000
 	Drain  ControlMsg = iota
 )
 
-type Stream[K, V any] struct {
-	msg chan Message[K, V]
-	ctl chan ControlMsg
+type Record[K, V any] struct {
+	controlMsg ControlMsg
+	Key        *K
+	Value      *V
 }
 
-type Message[K, V any] struct {
-	key   K
-	value V
+type Stream[K, V any] struct {
+	c chan *Record[K, V]
+}
+
+func NewStream[K, V any]() (Stream[K, V], func(*Record[K, V]), func()) {
+	c := make(chan *Record[K, V], buffer)
+	s := Stream[K, V]{
+		c,
+	}
+	emmit := func(m *Record[K, V]) {
+		c <- m
+	}
+	flush := func() {
+		c <- &Record[K, V]{
+			controlMsg: Drain,
+		}
+	}
+	return s, emmit, flush
+}
+
+func (s Stream[K, V]) Close() {
+	close(s.c)
 }
 
 func From[V any](list []V) Stream[int, V] {
-	msgs := make(chan Message[int, V], buffer)
-	ctl := make(chan ControlMsg)
+	new, emmit, flush := NewStream[int, V]()
 
 	go func() {
-		for key, value := range list {
-			msg := Message[int, V]{key, value}
-			msgs <- msg
+		for i, value := range list {
+			emmit(&Record[int, V]{Key: &i, Value: &value})
 		}
-		close(msgs)
-		close(ctl)
+		flush()
+		new.Close()
 	}()
 
-	return Stream[int, V]{msgs, ctl}
+	return new
 }
 
-func FromSlice[K, V any](list []Message[K, V]) Stream[K, V] {
-	msgs := make(chan Message[K, V], buffer)
-	ctl := make(chan ControlMsg)
+func ToStream[K, V any](list []Record[K, V]) Stream[K, V] {
+	new, emmit, flush := NewStream[K, V]()
 
 	go func() {
 		for _, msg := range list {
-			msgs <- msg
+			emmit(&msg)
 		}
-		close(msgs)
-		close(ctl)
+		flush()
+		new.Close()
 	}()
 
-	return Stream[K, V]{msgs, ctl}
+	return new
 }
 
-func Branch[K, V any](s Stream[K, V], distribution []func(Message[K, V]) bool) []Stream[K, V] {
-	return []Stream[K, V]{}
+func (s Stream[K, V]) transform(transformer func(m *Record[K, V], emmit func(*Record[K, V]))) Stream[K, V] {
+	return transform(s, transformer)
 }
 
-func Filter[K, V any](s Stream[K, V], selector func(Message[K, V]) bool) Stream[K, V] {
-	msg := make(chan Message[K, V], buffer)
-	ctl := make(chan ControlMsg)
-	stream := Stream[K, V]{
-		msg,
-		ctl,
-	}
+func transform[K1, V1, K2, V2 any](s Stream[K1, V1], transformer func(m *Record[K1, V1], emmit func(*Record[K2, V2]))) Stream[K2, V2] {
+	new, emmit, flush := NewStream[K2, V2]()
 
 	go func() {
-		for {
-			select {
-			case m, ok := <-s.msg:
-				stream.msg <- m
-				if !ok {
-					s.msg = nil
-				}
-			case d, ok := <-s.ctl:
-				for len(s.msg) > 0 {
-					m := <-s.msg
-					stream.msg <- m
-				}
-
-				stream.ctl <- d
-				if !ok {
-					s.ctl = nil
-				}
+		for e := range s.c {
+			if e.controlMsg == Drain {
+				flush()
+				continue
 			}
-
-			if s.msg == nil && s.ctl == nil {
-				break
-			}
+			transformer(e, emmit)
 		}
-
-		close(msg)
-		close(ctl)
+		close(new.c)
 	}()
 
-	return stream
+	return new
 }
 
-func NotFilter[K, V any](s Stream[K, V], selector func(Message[K, V]) bool) Stream[K, V] {
-	not := func(m Message[K, V]) bool {
-		return !selector(m)
+func (s Stream[K, V]) Print() {
+	s.process(func(m *Record[K, V]) {
+		log.Println(m)
+	})
+}
+
+func (s Stream[K, V]) Foreach(task func(m *Record[K, V])) {
+	s.process(task)
+}
+
+func (s Stream[K, V]) Peek(peeker func(m *Record[K, V])) Stream[K, V] {
+	return s.transform(func(m *Record[K, V], emmit func(*Record[K, V])) {
+		peeker(m)
+		emmit(m)
+	})
+}
+
+func (s Stream[K, V]) process(processor func(m *Record[K, V])) {
+	go func() {
+		for e := range s.c {
+			if e.controlMsg == Drain {
+				continue
+			}
+			processor(e)
+		}
+	}()
+}
+
+func (s Stream[K, V]) Filter(filter func(m *Record[K, V]) bool) Stream[K, V] {
+	p := func(m *Record[K, V], emmit func(*Record[K, V])) {
+		if filter(m) {
+			emmit(m)
+		}
 	}
-	return Filter(s, not)
+	return s.transform(p)
 }
 
-/*
-func FlatMap[K, V any](s Stream[K, V], mapper func(Message[K, V]) []Message[K, V]) Stream[K, V] {
-	return Stream[K, V]{}
+func (s Stream[K, V]) Map(map_ func(m *Record[K, V]) *Record[K, V]) Stream[K, V] {
+	return s.transform(func(m *Record[K, V], emmit func(*Record[K, V])) {
+		m2 := map_(m)
+		emmit(m2)
+	})
 }
 
-func FlatMapValues[K, V any](s Stream[K, V], mapper func(V) []V) Stream[K, V] {
-	return Stream[K, V]{}
+func Map[K1, V1, K2, V2 any](s Stream[K1, V1], map_ func(m *Record[K1, V1]) *Record[K2, V2]) Stream[K2, V2] {
+	return transform(s, func(m *Record[K1, V1], emmit func(*Record[K2, V2])) {
+		m2 := map_(m)
+		emmit(m2)
+	})
 }
 
-func Foreach[K, V any](s Stream[K, V], foreach func(Message[K, V])) {
-}
+func (s Stream[K, V]) Validate() (int, int) {
+	msgCount := 0
+	ctlCount := 0
 
-func GroupByKey[K, V any](s Stream[K, V]) Stream[K, V] {
-	return Stream[K, V]{}
-}
+	for e := range s.c {
+		if e.controlMsg == Drain {
+			ctlCount++
+			continue
+		}
 
-func GroupBy[K, V any](s Stream[K, V], foreach func(Message[K, V])) Stream[K, V] {
-	return Stream[K, V]{}
-}
+		msgCount++
+	}
 
-func Cogroup[K, V any](s Stream[K, V], foreach func(Message[K, V])) Stream[K, V] {
-	return Stream[K, V]{}
+	return msgCount, ctlCount
 }
-
-func Map[K, V any](s Stream[K, V], foreach func(Message[K, V])) Stream[K, V] {
-	return Stream[K, V]{}
-}
-
-func MapValues[K, V any](s Stream[K, V], foreach func(Message[K, V])) Stream[K, V] {
-	return Stream[K, V]{}
-}
-
-func Merge[K, V any](s Stream[K, V], foreach func(Message[K, V])) Stream[K, V] {
-	return Stream[K, V]{}
-}
-
-func Peek[K, V any](s Stream[K, V], foreach func(Message[K, V])) Stream[K, V] {
-	return Stream[K, V]{}
-}
-
-func Print[K, V any](s Stream[K, V], foreach func(Message[K, V])) Stream[K, V] {
-	return Stream[K, V]{}
-}
-
-func SelectKey[K, V any](s Stream[K, V], foreach func(Message[K, V])) Stream[K, V] {
-	return Stream[K, V]{}
-}
-
-func Repartition[K, V any](s Stream[K, V], foreach func(Message[K, V])) Stream[K, V] {
-	return Stream[K, V]{}
-}
-*/
