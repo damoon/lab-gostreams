@@ -1,7 +1,7 @@
 
 // Branch
 // Filter
-// NotFilter
+// FilterNot
 // FlatMap
 // FlatMapValues
 // Foreach

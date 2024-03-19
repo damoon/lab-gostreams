@@ -2,13 +2,16 @@ package main
 
 import (
 	"log"
+	"os"
 	"time"
+
+	"github.com/pkg/profile"
 )
 
 type ControlMsg int64
 
 const (
-	buffer            = 10
+	buffer            = 1_000
 	Drain  ControlMsg = iota
 )
 
@@ -86,19 +89,32 @@ func Map[K1, V1, K2, V2 any](s Stream[K1, V1], map_ func(m *Record[K1, V1]) *Rec
 	})
 }
 
-func (s Stream[K, V]) Count() int {
-	c := 0
+func (s Stream[K, V]) Validate() (int, int) {
+	msgCount := 0
+	ctlCount := 0
 
 	for e := range s.c {
-		if e.ControlMsg != Drain {
-			c++
+		if e.ControlMsg == Drain {
+			ctlCount++
+			continue
 		}
+
+		msgCount++
 	}
 
-	return c
+	return msgCount, ctlCount
 }
 
 func main() {
+	switch os.Getenv("PROFILE") {
+	case "cpu":
+		defer profile.Start(profile.CPUProfile, profile.ProfilePath(".")).Stop()
+	case "mem":
+		defer profile.Start(profile.MemProfile, profile.ProfilePath(".")).Stop()
+	case "trace":
+		defer profile.Start(profile.TraceProfile, profile.ProfilePath(".")).Stop()
+	}
+
 	err := run()
 	if err != nil {
 		log.Fatal(err)
@@ -125,15 +141,19 @@ func run() error {
 		source.Close()
 	}()
 
-	isEven := func(m *Record[int, int]) bool {
-		return (*m.v)%2 == 0
+	// isEven := func(m *Record[int, int]) bool {
+	// 	return (*m.v)%2 == 0
+	// }
+	true_ := func(m *Record[int, int]) bool {
+		return true
 	}
 
-	evenNumbers := source.Filter(isEven)
+	evenNumbers := source.Filter(true_)
 
-	count := evenNumbers.Count()
+	msgCount, ctlCount := evenNumbers.Validate()
 
-	log.Printf("count: %d", count)
+	log.Printf("msgCount: %d", msgCount)
+	log.Printf("ctlCount: %d", ctlCount)
 
 	log.Printf("now: %v", time.Since(start))
 

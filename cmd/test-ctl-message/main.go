@@ -14,27 +14,27 @@ func main() {
 
 	start := time.Now()
 
-	ch1 := make(chan Message)
+	ch1 := make(chan *Message)
 
 	go func() {
 		for i := 0; i < 1_000; i++ {
 			for i := 0; i < 10_000; i++ {
-				ch1 <- Message{value: i}
+				ch1 <- &Message{value: i}
 			}
-			ch1 <- Message{commit: true}
+			ch1 <- &Message{commit: true}
 		}
 		close(ch1)
 	}()
 
-	ch2 := make(chan Message)
+	ch2 := make(chan *Message)
 
 	go func() {
 		for m := range ch1 {
 			if m.commit {
-				ch2 <- Message{commit: true}
+				ch2 <- m
 				continue
 			}
-			ch2 <- Message{value: m.value}
+			ch2 <- m
 		}
 		close(ch2)
 	}()
